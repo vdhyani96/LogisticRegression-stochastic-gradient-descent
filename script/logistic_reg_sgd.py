@@ -6,15 +6,17 @@ Spyder Editor
 
 import numpy as np
 import pandas as pd
-import os
-import pickle
+import matplotlib.pyplot as plt
 
 
 def stoch_grd_dcnt(train, batch_size, n0, n1, max_epoch, delta):
     # getting the total number of classes
     k = train['Category'].nunique()
-    theta_old = np.zeros((train.shape[1], k-1))
-    theta_new = theta_old
+    theta = np.zeros((train.shape[1], k-1))
+    theta_list = []
+    theta_list.append(theta)
+    loss_list = []
+    loss_list.append(loss(theta, train))
     for epoch in range(max_epoch):
         print(epoch+1, "Epochs started.")
         n = n0/(n1 + epoch)
@@ -22,19 +24,18 @@ def stoch_grd_dcnt(train, batch_size, n0, n1, max_epoch, delta):
         # dividing the training set into batches
         num_batch = int(train.shape[0]/batch_size)
         batches = np.split(train, num_batch, axis = 0)
-        
         # theta update using gradient descent
         for i in range(num_batch):
-            print(i, "batch completed")
-            theta_new = grad_desc(theta_new, n, batches[i], k)
-        
-        if(loss(theta_new, train) > (1 - delta) * loss(theta_old, train)):
+            theta = np.array(grad_desc(np.array(theta), n, batches[i], k))
+        theta_list.append(theta)
+        # computing and storing the loss function using new theta
+        loss_list.append(loss(theta, train))
+        if(loss_list[-1] > (1 - delta) * loss_list[-2] and 
+           epoch > 2):
             print("Not much progress, terminate")
             break
-        else:
-            theta_old = theta_new
         print(epoch+1, "Epochs completed.")
-    return theta_new
+    return theta_list, loss_list
 
 
 def grad_desc(theta, n, batch, k):
@@ -88,15 +89,15 @@ def loss(theta, x):
     k = y.nunique()
     for i in range(num):
         xi = x.iloc[i, :].T
-        #yi = y.iloc[i]
-        totalprob = 0
+        proby = []
         for j in range(k-1):
             prob = calcprob(j, theta, xi, False)
-            totalprob += prob
+            proby.append(prob)
         # now for kth class
         prob = calcprob(k, theta, xi, True)
-        totalprob += prob
-        logprob = np.log(totalprob)
+        proby.append(prob)
+        prob = np.max(proby)
+        logprob = np.log(prob)
         logloss += logprob
     finalloss = (-1) * (logloss/num)
     return finalloss
@@ -127,7 +128,6 @@ def predict(theta, test):
     
 
 
-os.chdir('C:\\Users\\admin\\Desktop\\PostG\\GRE\\Second Take\\Applications\\Univs\\Stony Brook\\Fall 19 Courses\\ML\\Homeworks\\Homework 3\\Kaggle')
 # reading the feature dataset
 Train_Features = pd.read_pickle('Train_Features.pkl', compression="infer")
 Train_Feat = pd.DataFrame.from_dict(Train_Features, orient='index')
@@ -137,6 +137,8 @@ Train_Feat['Id'] = Train_Feat.index
 
 Val_Features = pd.read_pickle('Val_Features.pkl', compression="infer")
 Val_Feat = pd.DataFrame.from_dict(Val_Features, orient='index')
+# standardize the validation features
+Val_Feat = standardize(Val_Feat)
 Val_Feat['Id'] = Val_Feat.index
 
 Test_Features = pd.read_pickle('Test_Features.pkl', compression="infer")
@@ -150,18 +152,105 @@ Val_labels = pd.read_csv('Val_Labels.csv')
 Train = Train_Feat.merge(Train_labels, how = 'inner', on = 'Id')
 Train = Train.drop(['Id'], axis = 1)
 
-# Run the first stochastic gradient descent on the training example
-theta = stoch_grd_dcnt(Train, 16, 0.1, 1, 10, 0.00001)
+Val = Val_Feat.merge(Val_labels, how = 'inner', on = 'Id')
+Val = Val.drop(['Id'], axis = 1)
+
+# 1. Run the first stochastic gradient descent on the training example
+params = stoch_grd_dcnt(Train, 16, 0.1, 1, 1000, 0.00001)
+theta_list = params[0]
+loss_list = params[1]
+#>> Number of epochs = 5
+#>> Final value of L(theta) = 0.49066431813575173
+# Plotting the L(theta) against the number of epochs
+plt.plot(loss_list)
+plt.grid()
+
+# 2. Experimenting with a few values of (n0, n1) for sgd learning rate
+params1 = stoch_grd_dcnt(Train, 16, 0.01, 1, 1000, 0.00001)
+params2 = stoch_grd_dcnt(Train, 16, 0.05, 1, 1000, 0.00001)
+params3 = stoch_grd_dcnt(Train, 16, 0.5, 1, 1000, 0.00001)
+params4 = stoch_grd_dcnt(Train, 16, 1, 1, 1000, 0.00001)
+#>> Values of n0, n1 with fastest convergence = 1, 1 (Params4)
+#>> Number of epochs = 4
+#>> Final value of L(theta) = 0.09567952584634766
+# Plotting the L(theta) with the epochs
+plt.plot(params4[1])
+plt.grid()
+
+# 3. Run the algorithm on the validation data
+params_val = stoch_grd_dcnt(Val, 16, 0.1, 1, 1000, 0.00001)
+# plotting
+plt.plot(params_val[1])
+plt.plot(params[1])
+plt.legend(['Loss with Validation', 'Loss with Training'], loc = 'upper right')
+plt.grid()
+# now calculating the accuracies
+train_accuracy, val_accuracy = [], []
+# for training data
+tr_label = Train['Category']
+Train = Train.drop(['Category'], axis = 1)
+# append bias
+Train['bias'] = [1 for i in range(Train.shape[0])]
+
+for i in range(len(params[0])):
+    theta = params[0][i]
+    pred = predict(theta, Train)
+    predictions = np.argmax(pred, axis = 0)
+    predictions = predictions + 1
+    matches = np.sum(predictions == tr_label)
+    accuracy = matches/4000
+    train_accuracy.append(accuracy)
+
+# for validation data
+val_label = Val['Category']
+Val = Val.drop(['Category'], axis = 1)
+# append bias
+Val['bias'] = [1 for i in range(Val.shape[0])]
+
+for i in range(len(params_val[0])):
+    theta = params_val[0][i]
+    pred = predict(theta, Val)
+    predictions = np.argmax(pred, axis = 0)
+    predictions = predictions + 1
+    matches = np.sum(predictions == val_label)
+    accuracy = matches/2000
+    val_accuracy.append(accuracy)
+
+# now plotting the accuracies
+plt.plot(val_accuracy)
+plt.plot(train_accuracy)
+plt.legend(['Validation accuracy', 'Training accuracy'])
+plt.grid()
 
 
+# 4. Confusion matrices for validation and training sets
+# first for training set
+theta = params[0][5]
+pred = predict(theta, Train)
+predictions = np.argmax(pred, axis = 0)
+predictions = predictions + 1
+tr_confusion = pd.crosstab(tr_label, predictions)
+print(tr_confusion)
+#Predicted   1    2    3    4
+#Actual                    
+#1.0       457  253   40   33
+#2.0       136  879  140  114
+#3.0        62  262  319  173
+#4.0        40  133  137  822
 
-
-
-
-
-
-
-
+# now for validation set
+theta = params_val[0][6]
+pred = predict(theta, Val)
+predictions = np.argmax(pred, axis = 0)
+predictions = predictions + 1
+val_confusion = pd.crosstab(val_label, predictions)
+print(val_confusion)
+#Predicted   1    2    3    4
+#Actual                    
+#1.0       213   72   13   18
+#2.0        60  487   62   51
+#3.0        10  119  225   84
+#4.0         7   56   50  473
 
 
 
@@ -185,9 +274,10 @@ train = train.merge(labels, how = 'inner', on = 'Id')
 train = train.drop(['Id'], axis = 1)
 
 # run the algorithm with sgd
-theta = stoch_grd_dcnt(train, 16, 0.1, 1, 10, 0.00001)
+test_params = stoch_grd_dcnt(train, 16, 0.1, 1, 10, 0.00001)
 # append bias at the end of the test set
 test['bias'] = [1 for i in range(test.shape[0])]
+theta = test_params[0][1]
 pred = predict(theta, test)
 # predicting the class from the obtained prediction matrix
 predictions = np.argmax(pred, axis = 0)
@@ -203,4 +293,4 @@ submission = np.append(id_num, predictions, axis = 1)
 df = pd.DataFrame(data = submission, columns = ['Id', 'Category'])
 df.to_csv('submission.csv', index = False)
 
-
+# Accuracy on Kaggle: 0.37833
